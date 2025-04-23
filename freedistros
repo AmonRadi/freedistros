@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+
+# Using in fetch_soup()
+import requests
+
+# Using in save_to_file()
+import datetime
+import os
+
+# Using in interface()
+import argparse
+
+
+
+# Link to the list of full free GNU/Linux distros confirmed by Free Software Foundation.
+BASE_URL = "https://www.gnu.org/distros/free-distros.html"
+
+# <h3 id=...> of the main free distros lists. 
+# Using in get_distro_links_after_heading()
+FOR_PC = "for-pc"
+SMALL_DISTROS = "small-distros"
+HISTORICAL = "Historical"
+
+# Get HTTP Response from the BASE_URL and convert it using BeautifulSoup.
+def fetch_soup(url):
+    """Fetch a web page and return a parsed BeautifulSoup object."""
+    from bs4 import BeautifulSoup
+
+    req = requests.get(url)
+    return BeautifulSoup(req.text, "lxml")
+
+
+def get_distro_links_after_heading(soup, heading_id):
+    """
+    Find the <table> element following an <h3> tag with a specific ID and extract distro links.
+
+    :param soup: parsed html tree.
+    :return: a list of absolute URLs extracted from the table.
+    """
+
+    heading = soup.find("h3", id=heading_id)
+    if not heading:
+        return []
+    
+    # Find next table after <h3>
+    table = heading.find_next("table")
+    if not table:
+        return []
+    
+    # Find all <a href=...> in cells with "icon" class.
+    icon_cells = table.find_all("td", class_="icon")
+    links = []
+
+    for cell in icon_cells:
+        a_tag = cell.find("a")
+        if a_tag and "href" in a_tag.attrs:
+            href = a_tag["href"]
+            # Transform relative link to absolute
+            if href.startswith("/"):
+                href = f"https://www.gnu.org{href}"
+            
+            links.append(href)
+    
+    return links
+
+
+def get_distros_for_pc(soup):
+    """
+    Return a formatted string of links for PC and workstation GNU/Linux distributions.
+
+    :param soup: parsed html tree.
+    :return: formatted string with one URL per line.
+    """
+    for_pc_links = get_distro_links_after_heading(soup, FOR_PC)
+    output = ["GNU/Linux distros for PCs and workstations:"]
+    output.extend(for_pc_links)
+    return "\n".join(output)
+
+
+
+def get_small_distros(soup):
+    """
+    Return a formatted string of links for small GNU/Linux distributions.
+
+    :param soup: parsed html tree.
+    :return: formatted string with one URL per line.
+    """
+    small_distros_links = get_distro_links_after_heading(soup, SMALL_DISTROS)
+    output = ["Small GNU/Linux distros:"]
+    output.extend(small_distros_links)
+    return "\n".join(output) 
+
+
+def get_historical_distros(soup):
+    """
+    Return a formatted string of links for historical GNU/Linux distributions.
+
+    :param soup: parsed html tree.
+    :return: formatted string with one URL per line.
+    """
+    historical_distros_links = get_distro_links_after_heading(soup, HISTORICAL)
+    output = ["The distributions that follow were previously listed above, but are no longer recommended:"]
+    output.extend(historical_distros_links)
+    return "\n".join(output)
+
+
+def get_all_distros(soup):
+    """
+    Return distros from three main lists together.
+
+    :param soup: parsed html tree.
+    :return: combined formatted string of distro links.
+    """
+    pc = get_distros_for_pc(soup)
+    small = get_small_distros(soup)
+    historical = get_historical_distros(soup)
+
+    all_ = [pc, small, historical]
+    return "\n\n".join(all_)
+
+
+def save_to_file(data, prefix="output", path="results"):
+    """
+    Save data to a timestamped .txt file with prefix, date and time in the name.
+
+    :param data: content to write (str or list of str's).
+    :param prefix: prefix for the filename (e.g., "pc-distros", "small distros").
+    :param path: directory to save the file (default: "results").
+    """
+    # Generate timestamp for filename.
+    now = datetime.datetime.now()
+    timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
+
+    filename = f"{prefix}_{timestamp}.txt"
+    full_path = os.path.join(path, filename)
+
+    # Convert list to string if necessary.
+    if isinstance(data, list):
+        data = "\n".join(data)
+
+    # Ensure the output directory exists.
+    os.makedirs(path, exist_ok=True)
+
+    with open(full_path, "w", encoding="utf-8") as file:
+        file.write(data)
+
+
+def interface():
+    """CLI for scraping and optionally saving links to free GNU/Linux distros."""
+    parser = argparse.ArgumentParser(
+        prog="freedistros",
+        description="Tool for scraping links to the full free GNU/Linux distros confirmed by Free Software Foundation.\n" \
+        "If no category is specified, the --all option will be used by default.",
+        epilog="Examples:\n freedistros -pc -s\n freedistros -all --save /home/user/results --quiet",
+        formatter_class=argparse.RawTextHelpFormatter
+        )
+        
+
+    parser.add_argument("-pc", "-p", "--forpc", "--for-pc", action="store_true", help="Get distros for PCs and workstations.")
+    parser.add_argument("-s","--small", action="store_true", help="Get small distros.")
+    parser.add_argument("-hs","--historical", action="store_true", help="Get historical distros.")
+    parser.add_argument("-a","--all", action="store_true", help="Get distros from all categories.")
+    parser.add_argument("--save", nargs="?", const="results", default=None, help="Save output to file. Optional path (default: results/).")
+    parser.add_argument("-q","--quiet", action="store_true", help="Suppress output to terminal.")
+    parser.add_argument("-v", "--version", action="version", version="freedistros 1.0")
+    args = parser.parse_args()
+    
+    try:
+        soup = fetch_soup(BASE_URL)
+    except requests.RequestEsception as e:
+        print(f"Failed to fetch data: {e}")
+        exit(1)
+
+    collected_output = []
+   
+    # Track which categories were selected (used in output filename).
+    active = []
+
+    if not any((args.forpc, args.small, args.historical, args.all)):
+        args.all = True
+
+    if args.all:
+        # If --all is set, ignore other category flags.
+        data = get_all_distros(soup)
+        collected_output.append(data)
+        active.append("all")
+    
+    else:
+        if args.forpc:
+            data = get_distros_for_pc(soup)
+            collected_output.append(data)
+            active.append("pc")
+
+        if args.small:
+            data = get_small_distros(soup)
+            collected_output.append(data)
+            active.append("small")
+
+        if args.historical:
+            data = get_historical_distros(soup)
+            collected_output.append(data)
+            active.append("historical")
+
+    # Prefix to use in save_to_file()
+    prefix = "freedistros_" + "_".join(active)
+
+    if collected_output:
+        final_output = "\n\n".join(collected_output)
+
+        if args.save:
+            save_to_file(final_output, prefix=prefix, path=args.save)
+
+        if not args.quiet:
+            print(final_output)
+
+if __name__ == "__main__":
+    interface()
